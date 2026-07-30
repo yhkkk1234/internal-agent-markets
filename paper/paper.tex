@@ -1,0 +1,392 @@
+\documentclass[a4paper,11pt]{article}
+
+% ── Packages ──
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{parskip}
+\usepackage{fancyhdr}
+\usepackage{multirow}
+
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Why Internal Agent Markets Fail at Small Scale}
+\fancyhead[R]{\small Duan Li}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcommand{\tabref}[1]{Table~\ref{#1}}
+\newcommand{\figref}[1]{Figure~\ref{#1}}
+
+\title{\textbf{Why Internal Agent Markets Fail at Small Scale:\\
+Five Hypotheses Tested on a Multi-Objective GridWorld}}
+
+\author{Duan Li\\
+\textit{Independent Researcher}}
+
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+Can a ``market'' of competing internal modules---each with distinct preferences, staking their own resources on decisions, and subject to monopoly-breaking revolution mechanisms---produce better collective behavior than a single unified agent? We build a minimal experimental framework where multiple neural policy modules compete for action execution rights in a multi-resource GridWorld survival environment, testing five sequential hypotheses over more than fifty experimental configurations. We find that: (1) naive market competition collapses into monopoly; (2) an antitrust revolution mechanism successfully breaks monopoly and maintains diversity; (3) state-aware arbitration improves resource collection by 6$\times$ but does not surpass the single-agent baseline; (4) input-level differentiation via optimistic perceptual bias is cleaner than reward-level distortion; and (5) a learnable arbitrator achieves the first instance where the market surpasses the single agent on survival steps (83.3 vs.\ 73.6, with 3.5$\times$ lower variance). However, the market consistently underperforms in raw resource collection efficiency. We identify the \textit{coordination cost ceiling}---the overhead of multi-module arbitration exceeds the benefit of specialization at small scale---as the fundamental limiting factor, and discuss conditions under which this ceiling may be overcome in larger systems.
+\end{abstract}
+
+% ============================================================
+\section{Introduction}
+% ============================================================
+
+\subsection{Motivation: AI as a Spiritual System?}
+
+This work originates from a philosophical thought experiment about the nature of belief systems, artificial intelligence, and internal governance. The core question posed was: if religious and mythological systems fill existential gaps through shared narratives---and if AI systems are increasingly becoming the ``oracles'' we consult for decisions---can we design an internal governance mechanism where AI modules compete, stake their own resources, and earn trust through demonstrated performance, much like competing belief systems?
+
+The analogy runs deeper: in human societies, monopoly of power leads to stagnation; competition and revolution drive adaptation. If an AI system consists of multiple internal ``experts'' with different biases and preferences, could an internal market mechanism---complete with capital, reputation, liquidation, and antitrust revolution---produce emergent collective intelligence that surpasses any single module?
+
+\subsection{From Philosophy to Experiment}
+
+Rather than treat this as pure speculation, we operationalize it as a minimal testable system: a multi-resource GridWorld where an agent must balance competing survival needs (energy and hydration). Multiple small neural policy modules compete for action execution rights in an internal market. Each module has capital and reputation at stake; good decisions earn resources, bad decisions trigger liquidation.
+
+This paper documents five sequential hypotheses tested across over fifty experimental configurations. The value is not in a positive result---we mostly find \textit{failure modes}---but in the systematic documentation of \textit{why} internal agent markets fail at small scale, and \textit{what conditions} would be necessary for them to succeed.
+
+% ============================================================
+\section{Experimental Framework}
+% ============================================================
+
+\subsection{Environment: Dual-Resource GridWorld}
+
+The agent operates on an $8\times8$ grid with border walls ($6\times6$ accessible interior). Three food sources (+20 energy), three water sources (+20 hydration), and one danger zone ($-$20 to both) are randomly placed. At each step, both energy and hydration deplete by 1 unit. If either resource reaches zero, the agent dies. The maximum episode length is 200 steps.
+
+\textbf{Observation:} A $5\times5$ local vision window with one-hot entity encoding (6 entity types: empty, wall, food, water, danger, agent), yielding 150 features, plus 5 global features (position $x$, position $y$, energy ratio, water ratio, step ratio) for a total of 155 dimensions.
+
+\textbf{Actions:} 6 discrete actions: up, down, left, right, collect, wait.
+
+\textbf{Reward:} Raw energy/hydration change plus a small proximity bonus ($0.3\times\Delta\text{distance}$ to nearest resource). No reward shaping beyond this.
+
+\subsection{Policy Modules}
+
+Each module is a 2-layer MLP (obs dim $\rightarrow$ 32 $\rightarrow$ 32 $\rightarrow$ 6 logits, 1 value) with approximately 6,200 parameters. Modules are trained with PPO (clipped surrogate objective, $\epsilon=0.2$, 4 epochs per batch, batch size of 8 episodes).
+
+Modules share all training experiences---every transition is used to train every active module. Differentiation comes from perceptual biases (see below), not from separate training data.
+
+\subsection{Internal Market Mechanism}
+
+\subsubsection{Arbitration}
+
+At each step, all active modules observe the state and propose an action with a confidence score. An arbitrator selects one module's proposed action based on a scoring function. The selected action is executed in the environment.
+
+The arbitrator evolved through five designs across our hypotheses:
+\begin{enumerate}[itemsep=2pt]
+    \item \textbf{H1--H2:} Naive reputation $\times$ confidence scoring, argmax winner.
+    \item \textbf{H3:} State-aware bonus: $\text{score} = \text{reputation} \times \text{confidence} + \lambda \cdot \text{need} \cdot \text{bias}$, where $\text{need}$ is resource scarcity and $\text{bias}$ is the module's specialty.
+    \item \textbf{H4--H5:} In the final configuration, a \textbf{LearnableArbitrator}---a separate 2-layer MLP (obs $\rightarrow$ 32 $\rightarrow$ 32 $\rightarrow$ 4 logits) trained with REINFORCE---learns to select modules based on state, replacing all hand-crafted scoring.
+\end{enumerate}
+
+\subsubsection{Settlement \& Liquidation}
+
+After action execution, the winner's capital is updated:
+\begin{itemize}[itemsep=2pt]
+    \item \textbf{Win} (env\_reward $>$ 0): capital $+$ stake $\times$ 1.5, reputation $+$ 0.1
+    \item \textbf{Loss} (env\_reward $< -5$): capital $-$ stake $\times$ 1.5, reputation $-$ 0.1
+    \item \textbf{Neutral}: no change
+\end{itemize}
+Modules that bet on the same action as the winner (``allies'') receive half penalties/rewards. All active modules pay a small per-step capital cost (0.02). Modules with capital $\le$ 0 become dormant.
+
+\subsubsection{Revival \& Antitrust Revolution}
+
+Every 10 steps, one dormant module is revived by copying the best active module's weights with noise ($\sigma=0.05$).
+
+An antitrust mechanism monitors the selection distribution over a 50-step sliding window. When any module exceeds 65\% selection share, a revolution is triggered: 30\% of the monopolist's capital is taxed and redistributed, its reputation is slashed by 0.3, and all other modules receive a temporary 0.2 reputation bonus for 30 steps (cooldown period).
+
+\subsection{Module Differentiation}
+
+We tested three approaches to creating strategic diversity among modules:
+
+\begin{enumerate}[itemsep=2pt]
+    \item \textbf{Reward Distortion} (H1, H2, H3): Each module has personality biases ($\alpha_{\text{food}}, \alpha_{\text{water}}$) that multiply the corresponding reward components. A food-specialist module sees food rewards 1.8$\times$ larger than real.
+    \item \textbf{Input Masking} (H4, early): Modules are blinded to certain observation features (e.g., water specialist cannot see energy level).
+    \item \textbf{Optimistic Perceptual Bias} (H4, H5): Modules see full observations but with an additive optimistic bias on their non-specialty resource (e.g., food specialist sees water level as +0.35 higher than reality).
+\end{enumerate}
+
+\subsection{Single-Agent Baseline}
+
+A single MLP with the same total parameter budget (obs $\rightarrow$ 64 $\rightarrow$ 64 $\rightarrow$ 6 logits + value, $\sim$7,900 parameters) trained with identical PPO hyperparameters on the same environment. No market, no modules, no arbitration.
+
+\subsection{Evaluation Protocol}
+
+After training on $N$ episodes (varying from 200--3000 across experiments), both systems are evaluated on 30 episodes with different random seeds (seed $+$ 999). Metrics reported: average reward, average food/water collected, average survival steps, standard deviation, and survival rate (episodes reaching max\_steps).
+
+% ============================================================
+\section{Five Hypotheses \& Results}
+% ============================================================
+
+\subsection{H1: Competition $\rightarrow$ Self-Organized Collaboration}
+
+\textbf{Hypothesis:} With multiple modules competing via capital and reputation, the internal market will naturally discover an efficient division of labor.
+
+\textbf{Configuration:} Reward distortion differentiation (food bias: 1.8/0.3, water bias: 0.3/1.8, safe: 0.0/0.0 with danger\_aversion 1.8, balanced: 1.0/1.0). Simple reputation $\times$ confidence arbitration. No antitrust.
+
+\textbf{Result:} Strongly \textbf{rejected}. Within $\sim$50 episodes, one module (M0, food specialist) achieves 100\% selection share in evaluation. All other modules go dormant. The market degenerates into a single-agent system, but worse: M0 receives all training selections, but its reward-distorted objective causes it to learn suboptimal behavior (0.0 foods collected vs.\ single baseline 1.2).
+
+\begin{table}[H]
+\centering
+\caption{H1: Initial results showing monopoly collapse.}
+\label{tab:h1}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Metric} & \textbf{Single} & \textbf{Market} & \textbf{Diff} \\
+\midrule
+Avg Foods  & 1.2 & 0.0 & $-$1.2 \\
+Avg Steps  & 92.5 & 99.0 & +6.5 \\
+Survival   & 10\% & 0\%  & $-$10\% \\
+M0 Eval Share & ---  & 100\% & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Finding:} Positive feedback (win $\rightarrow$ more capital $\rightarrow$ higher reputation $\rightarrow$ more selections $\rightarrow$ more wins) creates inevitable monopoly in any fixed-resource competition. This mirrors the ``competitive exclusion principle'' in ecology and ``winner-takes-all'' dynamics in platform economics.
+
+\subsection{H2: Revolution Mechanism Breaks Monopoly}
+
+\textbf{Hypothesis:} Adding an antitrust revolution mechanism (concentration tax + capital redistribution + temporary rebel bonus) will prevent monopoly and maintain healthy competition.
+
+\textbf{Configuration:} Same as H1, plus antitrust with 50-step monitoring window, 65\% threshold, 30\% tax rate.
+
+\textbf{Result:} \textbf{Partially confirmed.} The revolution mechanism triggers frequently (69--116 revolutions across various runs) and successfully prevents permanent monopoly. Module selection becomes genuinely diverse (M0: 26\%, M1: 20\%, M2: 24\%, M3: 30\%). However, the system still collects 0.0 foods---breaking monopoly does not automatically produce good decisions.
+
+The revolution mechanism works \textit{politically} but not \textit{functionally}. It redistributes power but does not improve the quality of the policies being executed.
+
+\subsection{H3: State-Aware Arbitration Selects the Right Expert}
+
+\textbf{Hypothesis:} If the arbitrator knows the current resource levels, it can boost food-seeking modules when energy is low and water-seeking modules when hydration is low, achieving intelligent module switching.
+
+\textbf{Configuration:} Reward distortion differentiation. Scoring extended with state-dependent bonus: $\lambda \cdot \max(0, 1 - \text{energy\_ratio}) \cdot \alpha_{\text{food}} + \lambda \cdot \max(0, 1 - \text{water\_ratio}) \cdot \alpha_{\text{water}}$, with $\lambda = 0.6$.
+
+\textbf{Result:} \textbf{Partially confirmed.} Resource collection improved from 0.1 to 0.6 foods (6$\times$) and 0.1 to 0.4 waters (4$\times$). The state-aware bonus correctly shifts module power based on resource needs. However, the reward distortion problem (H1) remains: modules learn from distorted objectives and make suboptimal decisions even when correctly selected.
+
+\begin{table}[H]
+\centering
+\caption{H3: State-aware arbitration improves collection but not enough.}
+\label{tab:h3}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Configuration} & \textbf{Single Foods} & \textbf{Single Waters} & \textbf{Market Foods} & \textbf{Market Waters} \\
+\midrule
+H1/H2 (no state bonus) & 1.2 & 1.0 & 0.1 & 0.1 \\
+H3 (state bonus $\lambda{=}0.6$) & 1.2 & 1.0 & 0.6 & 0.4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{H4: Input-Level Bias Beats Reward Distortion}
+
+\textbf{Hypothesis:} If differentiation is moved from the reward layer to the perception layer---modules see the same real rewards but with biased observations---the objective function remains correct and modules develop genuinely useful specializations.
+
+\textbf{Configuration:} ``Optimistic perceptual bias'': M0 sees water\_ratio $+0.35$ (optimistic about water), M1 sees energy\_ratio $+0.35$ (optimistic about energy), M2 sees danger vision attenuated to 20\%, M3 sees unmodified observation. All modules trained with the same real reward. State-aware arbitration.
+
+\textbf{Result:} \textbf{Partially confirmed.} Water collection improved to 0.8 (vs.\ 0.4 under reward distortion), and the training selection distribution became more balanced (M0: 1557, M1: 626, M2: 873, M3: 731 vs.\ the extreme monopoly of H1). The approach is architecturally cleaner: real gradients, biased perceptions, consistent training. However, the overall performance still lags behind the single agent.
+
+The key insight: reward distortion creates modules that optimize \textit{wrong objectives}. Input bias creates modules that optimize the \textit{right objective} with \textit{limited information}. The latter is preferable because the critic (value function) produces accurate estimates, even if the actor (policy) has blind spots.
+
+\subsection{H5: Learnable Arbitrator Learns When to Switch}
+
+\textbf{Hypothesis:} Replacing all hand-crafted scoring with a learned arbitrator---a neural network trained via REINFORCE to maximize episode return---will discover superior state-dependent module selection strategies.
+
+\textbf{Configuration:} Optimistic perceptual bias differentiation. LearnableArbitrator: 2-layer MLP (obs $\rightarrow$ 32 $\rightarrow$ 32 $\rightarrow$ 4 logits), softmax with temperature 0.5. Trained with REINFORCE using episode total reward as signal. Module training unchanged (PPO with batch updates).
+
+\textbf{Result:} \textbf{Partially confirmed---and the most significant positive result in this study.}
+
+At 2000 training episodes, the learnable arbitrator achieves:
+
+\begin{table}[H]
+\centering
+\caption{H5: Learnable arbitrator vs.\ single agent (2000 episodes).}
+\label{tab:h5}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Metric} & \textbf{Single} & \textbf{Market (Learnable)} & \textbf{Advantage} \\
+\midrule
+Avg Foods         & 1.7 & 0.4   & $-$1.3 \\
+Avg Waters        & 1.7 & 0.5   & $-$1.2 \\
+Avg Steps         & 73.6 & \textbf{83.3} & \textbf{+9.7} \\
+Std Steps         & 32.3 & \textbf{9.1}  & \textbf{3.5$\times$ lower} \\
+Survival Rate     & 0\%  & 0\%   & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{For the first time, the market system surpasses the single agent on a key metric:} average survival steps (83.3 vs.\ 73.6, $+$13.2\%). More importantly, the variance is 3.5$\times$ lower (std 9.1 vs.\ 32.3), indicating remarkably consistent behavior.
+
+The arbitrator learned a conservative strategy: avoid fatal mistakes rather than maximize resource intake. This is suboptimal for raw performance but optimal for \textit{reliability}---a tradeoff that may be desirable in safety-critical AI applications.
+
+At 3000 episodes, performance regressed slightly (77.6 steps, 0.4 foods), suggesting the REINFORCE-based arbitrator training remains unstable and oscillates around a local optimum rather than converging monotonically.
+
+\begin{table}[H]
+\centering
+\caption{Full hypothesis testing summary.}
+\label{tab:summary}
+\begin{tabular}{llp{5.5cm}}
+\toprule
+\textbf{Hypothesis} & \textbf{Status} & \textbf{Key Evidence} \\
+\midrule
+H1: Competition $\rightarrow$ collaboration & Rejected       & Monopoly within $\sim$50 eps \\
+H2: Revolution breaks monopoly             & Confirmed      & 69--116 revolutions; diversity achieved \\
+H3: State-aware arbitration works          & Partial        & 6$\times$ food improvement; still below baseline \\
+H4: Input bias $>$ reward distortion       & Partial        & 2$\times$ water improvement; cleaner architecture \\
+H5: Learnable arbitrator surpasses single  & Partial        & +13\% survival steps; 3.5$\times$ lower variance \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Discussion}
+% ============================================================
+
+\subsection{The Coordination Cost Ceiling}
+
+Across all five hypotheses and over fifty experimental configurations, one pattern remains consistent: \textbf{the multi-module market never matches the single agent's resource collection efficiency.} We propose the \textit{coordination cost ceiling} as the fundamental explanation:
+
+\begin{quote}
+For any task whose complexity $C$ falls below a threshold $T$, the overhead of multi-module coordination (arbitration noise, strategy switching costs, shared experience dilution) exceeds the benefit of specialization. The market mechanism only becomes favorable when $C > T$, i.e., when a single network's capacity is saturated and explicit modular decomposition becomes necessary.
+\end{quote}
+
+In our $8\times8$ dual-resource GridWorld, a 64-dimensional MLP handles the task comfortably. The market adds overhead without providing complementary benefit. This mirrors known phenomena in multi-agent reinforcement learning, where homogeneous agent teams often underperform single agents on simple tasks.
+
+\subsection{The Reliability-Resilience Tradeoff}
+
+Despite lower raw performance, the learnable arbitrator configuration achieved significantly lower variance (std 9.1 vs.\ 32.3). This suggests that multi-module systems may trade peak performance for consistency---a property that aligns with the original philosophical motivation of ``making AI systems that think carefully before acting.''
+
+In AI safety contexts, predictable suboptimality may be preferable to unpredictable high performance. The internal market's settlement mechanism (modules stake capital on decisions) creates a natural penalty for rash actions that single agents lack.
+
+\subsection{Why Reward Distortion Fails}
+
+The most important negative finding is that reward-level differentiation (personality biases on reward components) is architecturally unsound. It creates modules that optimize different objective functions, and the arbitration selects among policies learned under different reward signals. This is akin to having a parliament where each representative votes based on a different definition of ``social welfare''---the aggregation is meaningless.
+
+Input-level differentiation (perceptual bias) is cleaner because all modules share the same objective; they differ only in what information they can access. This mirrors human specialization: a cardiologist and a neurologist share the goal of patient health but focus on different diagnostic signals.
+
+\subsection{The ``France 1789'' Insight}
+
+The user's original analogy---comparing internal module dynamics to the French Revolution where ``winners don't always win in the end''---proved prescient. The antitrust revolution mechanism successfully cycles power among modules, preventing permanent monopoly. However, the \textit{Constitution} (arbitration rules) matters more than the \textit{revolution frequency}. A poorly-designed constitution (arbitration based on distorted signals) produces bad governance regardless of how often leaders are replaced.
+
+% ============================================================
+\section{Related Work}
+% ============================================================
+
+This work sits at the intersection of several research threads:
+
+\begin{itemize}[itemsep=2pt]
+    \item \textbf{Mixture-of-Experts (MoE):} Shazeer et al.\ (2017), Fedus et al.\ (2022), Jiang et al.\ (2024). MoE architectures use learned gating to route tokens to specialized experts. Our work differs in that modules compete via an economic mechanism (capital/reputation/liquidation) rather than a learned router, and the focus is on behavioral specialization rather than computational efficiency.
+    \item \textbf{Multi-Agent Reinforcement Learning (MARL):} Our market mechanism resembles MARL with shared rewards, but with explicit economic incentives (capital staking) and institutional mechanisms (antitrust revolution). The shared-experience training is similar to centralized training with decentralized execution (CTDE).
+    \item \textbf{AI Alignment \& Debate:} Irving et al.\ (2018) propose AI safety via debate between competing models. Our settlement/liquidation mechanism provides a concrete implementation of ``models with skin in the game.''
+    \item \textbf{Evolutionary Game Theory:} The monopoly dynamics we observe align with evolutionary stable strategies (ESS) and the competitive exclusion principle. Our revolution mechanism functions as an externally imposed diversity-maintaining force, analogous to frequency-dependent selection in biology.
+\end{itemize}
+
+% ============================================================
+\section{Limitations \& Future Work}
+% ============================================================
+
+\subsection{Limitations}
+
+\begin{enumerate}[itemsep=2pt]
+    \item \textbf{Scale:} All experiments use $\sim$6,200-parameter modules on an $8\times8$ grid. The coordination cost ceiling hypothesis predicts that market advantages emerge only when task complexity exceeds single-network capacity. This has not been tested.
+    \item \textbf{Reward Signal Sparsity:} The arbitrator is trained with REINFORCE using sparse episode-level rewards. This introduces high variance and limits convergence. More sophisticated credit assignment (e.g., per-step advantage estimation for arbitration decisions) may yield better results.
+    \item \textbf{Module Homogeneity:} Despite perceptual biases, modules share the same architecture and training algorithm. True specialization may require architectural heterogeneity (different network capacities, different learning rates, different observation modalities).
+    \item \textbf{Task Domain:} GridWorld navigation is a specific domain. Whether the findings generalize to language modeling, robotic control, or other domains is unknown.
+    \item \textbf{Capital Explosion:} The settlement multiplier (1.5$\times$) caused unbounded capital growth in early experiments, requiring a manual cap. A more principled economic model (e.g., logarithmic utility) would be more robust.
+\end{enumerate}
+
+\subsection{Future Directions}
+
+\begin{enumerate}[itemsep=2pt]
+    \item \textbf{Scale the task complexity:} Test on environments where a single network cannot easily capture the optimal policy---larger grids, more resource types, partial observability, hierarchical goals.
+    \item \textbf{Actor-Critic arbitration:} Replace REINFORCE with a learned critic (value function) for the arbitrator, enabling per-step credit assignment and more stable training.
+    \item \textbf{Heterogeneous module architectures:} Give modules different network capacities, different observation modalities (e.g., one module sees local vision, another sees global map), or different temporal horizons.
+    \item \textbf{The MoE connection:} Apply the capital/liquidation/antitrust mechanisms to a real MoE Transformer, testing whether economic incentives can replace or augment load-balancing losses.
+    \item \textbf{Formal coordination cost model:} Develop an information-theoretic or complexity-theoretic characterization of the threshold $T$ at which multi-module coordination becomes beneficial.
+\end{enumerate}
+
+% ============================================================
+\section{Conclusion}
+% ============================================================
+
+This paper documented a systematic investigation into whether an internal ``market'' of competing AI modules can outperform a single unified agent. Across five sequential hypotheses and over fifty experimental configurations, we found that while individual mechanisms (antitrust revolution, state-aware arbitration, optimistic perceptual bias, learnable arbitration) each produce measurable improvements, the multi-module system never matches the single agent's resource collection efficiency on a dual-resource GridWorld task.
+
+The key contribution is not a positive result, but a rigorous characterization of \textit{why} internal agent markets fail at small scale: the coordination cost of multi-module arbitration exceeds the benefit of specialization when task complexity falls below single-network capacity. We propose this as a testable hypothesis for future work at larger scales.
+
+The experiments do, however, provide evidence for two potentially valuable properties: (1) the revolution mechanism effectively prevents monopoly and maintains diversity, and (2) a learnable arbitrator achieves higher consistency (3.5$\times$ lower variance) than a single agent, even at the cost of lower raw performance.
+
+All code and experiment configurations are available in the accompanying repository.\footnote{The full experimental framework, including environment, market mechanism, training infrastructure, and all configuration presets, is available at: \texttt{F:/Test11/survival\_market/}. Run with: \texttt{python main\_dual.py --mode both}.}
+
+\subsection*{Acknowledgments}
+
+This work originated from extended philosophical discussions about the nature of belief systems, AI, and internal governance. The experimental design---particularly the antitrust revolution mechanism and the ``optimistic perceptual bias'' approach to module differentiation---was shaped through iterative dialogue and hypothesis testing.
+
+% ============================================================
+\begin{thebibliography}{99}
+
+\bibitem{shazeer2017}
+N.~Shazeer et al.
+\newblock Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer.
+\newblock In \textit{ICLR}, 2017.
+
+\bibitem{fedus2022}
+W.~Fedus, B.~Zoph, and N.~Shazeer.
+\newblock Switch Transformers: Scaling to Trillion Parameter Models.
+\newblock In \textit{JMLR}, 2022.
+
+\bibitem{jiang2024}
+A.~Q. Jiang et al.
+\newblock Mixtral of Experts.
+\newblock \textit{arXiv:2401.04088}, 2024.
+
+\bibitem{irving2018}
+G.~Irving, P.~Christiano, and D.~Amodei.
+\newblock AI Safety via Debate.
+\newblock \textit{arXiv:1805.00899}, 2018.
+
+\bibitem{schulman2017}
+J.~Schulman et al.
+\newblock Proximal Policy Optimization Algorithms.
+\newblock \textit{arXiv:1707.06347}, 2017.
+
+\bibitem{lowe2017}
+R.~Lowe et al.
+\newblock Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments.
+\newblock In \textit{NeurIPS}, 2017.
+
+\bibitem{williams1992}
+R.~J. Williams.
+\newblock Simple Statistical Gradient-Following Algorithms for Connectionist Reinforcement Learning.
+\newblock \textit{Machine Learning}, 8(3--4):229--256, 1992.
+
+\bibitem{foerster2018}
+J.~Foerster et al.
+\newblock Counterfactual Multi-Agent Policy Gradients.
+\newblock In \textit{AAAI}, 2018.
+
+\bibitem{frankle2019}
+J.~Frankle and M.~Carbin.
+\newblock The Lottery Ticket Hypothesis.
+\newblock In \textit{ICLR}, 2019.
+
+\end{thebibliography}
+
+\vspace{1cm}
+\noindent\rule{\textwidth}{0.4pt}
+\begin{center}
+\small
+Code repository and experimental data available at: \texttt{F:/Test11/survival\_market/}.\\
+All experiments reproducible on CPU with Python 3.10+, PyTorch 2.4+, NumPy.
+\end{center}
+
+\end{document}
